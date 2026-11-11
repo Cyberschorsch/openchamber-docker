@@ -19,8 +19,9 @@ trap cleanup EXIT
 
 fail() { echo "SMOKE TEST FAILED: $*"; docker logs "$NAME" 2>&1 | tail -n 80; exit 1; }
 
-# 1. Bundled OpenCode is the version we asked for
-ACTUAL=$(docker exec "$NAME" opencode --version 2>/dev/null | tr -d '[:space:]' || true)
+# 1. Bundled OpenCode is the version we asked for (run as agent: opencode writes
+#    its log on every invocation and root-owned files break the agent-owned server)
+ACTUAL=$(docker exec -u agent "$NAME" opencode --version 2>/dev/null | tr -d '[:space:]' || true)
 [[ "$ACTUAL" == *"$EXPECTED_OPENCODE"* ]] || fail "opencode --version is '$ACTUAL', expected $EXPECTED_OPENCODE"
 echo "ok: opencode $ACTUAL"
 

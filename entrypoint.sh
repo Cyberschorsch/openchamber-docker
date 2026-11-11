@@ -17,7 +17,9 @@ if [ "$(id -u)" = "0" ]; then
     chown agent:agent /home/agent /home/agent/workspaces
   fi
 
-  echo "OpenChamber $(npm ls -g @openchamber/web --depth=0 2>/dev/null | grep -o '@openchamber/web@[^ ]*' || true), OpenCode $(opencode --version 2>/dev/null || echo unknown)"
+  # Run the check as agent: opencode writes its log on every invocation, and a
+  # root-owned log file in /home/agent would break the server running as agent.
+  echo "OpenChamber $(npm ls -g @openchamber/web --depth=0 2>/dev/null | grep -o '@openchamber/web@[^ ]*' || true), OpenCode $(gosu agent opencode --version 2>/dev/null || echo unknown)"
   exec gosu agent "$@"
 fi
 
