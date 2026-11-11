@@ -1,0 +1,123 @@
+name: Build OpenChamber image
+
+on:
+  schedule:
+    - cron: "17 4 * * *"   # daily, 04:17 UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild even if this version pair already exists"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: write
+  issues: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve latest npm versions
+        id: v
+        run: |
+          OC=$(npm view @openchamber/web version)
+          OCODE=$(npm view @opencode/cli version)
+          IMAGE=$(echo "ghcr.io/${{ github.repository_owner }}/openchamber" | tr '[:upper:]' '[:lower:]')
+          TAG="openchamber-${OC}-opencode-${OCODE}"
+          echo "oc=$OC"       >> "$GITHUB_OUTPUT"
+          echo "ocode=$OCODE" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"     >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.force }}" != "true" ] && docker manifest inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "$TAG already published, nothing to do."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Building $TAG"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.v.outputs.skip == 'false'
+
+      - name: Build (local, not pushed yet)
+        if: steps.v.outputs.skip == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: openchamber:test
+          build-args: |
+            OPENCHAMBER_VERSION=${{ steps.v.outputs.oc }}
+            OPENCODE_VERSION=${{ steps.v.outputs.ocode }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        if: steps.v.outputs.skip == 'false'
+        run: ./smoke-test.sh openchamber:test "${{ steps.v.outputs.ocode }}"
+
+      - name: Publish tags
+        if: steps.v.outputs.skip == 'false'
+        run: |
+          IMAGE=${{ steps.v.outputs.image }}
+          for T in latest "openchamber-${{ steps.v.outputs.oc }}" "${{ steps.v.outputs.tag }}"; do
+            docker tag openchamber:test "$IMAGE:$T"
+            docker push "$IMAGE:$T"
+          done
+
+      - name: Record published versions
+        if: steps.v.outputs.skip == 'false'
+        run: |
+          printf '{\n  "openchamber": "%s",\n  "opencode": "%s"\n}\n' \
+            "${{ steps.v.outputs.oc }}" "${{ steps.v.outputs.ocode }}" > versions.json
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add versions.json
+          git commit -m "Publish ${{ steps.v.outputs.tag }}" && git push || echo "nothing to commit"
+
+      - name: Close open failure issues
+        if: success() && steps.v.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for N in $(gh issue list --state open --label build-failure --json number -q '.[].number'); do
+            gh issue close "$N" --comment "Fixed: ${{ steps.v.outputs.tag }} built and published."
+          done
+
+      - name: Upload smoke test log
+        if: always() && steps.v.outputs.skip == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-log
+          path: smoke.log
+          if-no-files-found: ignore
+
+      - name: Open issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create build-failure --color B60205 2>/dev/null || true
+          TITLE="Build failed: ${{ steps.v.outputs.tag }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          EXISTING=$(gh issue list --state open --label build-failure --search "\"$TITLE\" in:title" --json number -q '.[0].number')
+          if [ -z "$EXISTING" ]; then
+            gh issue create --label build-failure --title "$TITLE" \
+              --body "The image was **not** published; \`latest\` still points to the last working build. Run: $RUN_URL"
+          else
+            gh issue comment "$EXISTING" --body "Still failing: $RUN_URL"
+          fi
