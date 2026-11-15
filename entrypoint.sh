@@ -6,6 +6,15 @@ if [ -n "${OPENCHAMBER_UI_PASSWORD:-}" ]; then
   set -- "$@" --ui-password "$OPENCHAMBER_UI_PASSWORD"
 fi
 
+# Git identity for the agent's commits. Written to /etc/gitconfig on every start,
+# so it needs no volume and a repository's own user.name/user.email still wins.
+if [ -n "${GIT_USER_NAME:-}" ]; then
+  git config --system user.name "$GIT_USER_NAME" || echo "Could not set git user.name (not running as root?)"
+fi
+if [ -n "${GIT_USER_EMAIL:-}" ]; then
+  git config --system user.email "$GIT_USER_EMAIL" || echo "Could not set git user.email (not running as root?)"
+fi
+
 if [ "$(id -u)" = "0" ]; then
   # Map the agent user to PUID/PGID (Unraid: 99/100)
   groupmod -o -g "${PGID}" agent
