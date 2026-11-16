@@ -46,6 +46,16 @@ The agent can do whatever the token can, so keep it narrow:
 
 In the Unraid template, add the tokens as masked variables.
 
+### Cloning a project
+
+With the tokens set, start a new chat without a project and ask the agent to clone:
+
+```
+Clone https://github.com/owner/repo.git to /home/agent/workspaces/
+```
+
+The repository lands in `/home/agent/workspaces`; add it to OpenChamber with the **+** next to **Projects**.
+
 ## Volumes
 
 | Path | Content |
